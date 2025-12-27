@@ -8,3 +8,6 @@ __pycache__/
 
 # Ignore Mac system files
 .DS_Store
+
+# Ignore the passkey
+.streamlit/secrets.toml

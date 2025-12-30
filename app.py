@@ -3,6 +3,7 @@ import pandas as pd
 from streamlit_pdf_viewer import pdf_viewer
 from audit_engine import analyze_study, extract_text_from_pdf, extract_pico_criteria, mine_citations
 import database as db
+import concurrent.futures
 
 # Initialize Database
 db.init_db()
@@ -20,7 +21,6 @@ st.markdown("""
     .metric-badge { display: inline-block; padding: 4px 12px; border-radius: 15px; font-size: 0.85em; font-weight: 600; margin-right: 5px; margin-bottom: 5px; }
     .badge-success { background-color: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
     .badge-danger { background-color: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
-    .citation-card { border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; margin-bottom: 10px; background-color: white; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -33,7 +33,6 @@ if 'pico' not in st.session_state: st.session_state.pico = {}
 if 'workflow_mode' not in st.session_state: st.session_state.workflow_mode = None
 if 'temp_pico' not in st.session_state: st.session_state.temp_pico = None
 if 'last_audit_id' not in st.session_state: st.session_state.last_audit_id = None
-# Store meta-miner selections
 if 'miner_selections' not in st.session_state: st.session_state.miner_selections = {}
 
 # =========================================================
@@ -85,32 +84,64 @@ def render_full_result_view(row):
     st.progress(conf / 100)
 
 # =========================================================
-# LOGIN SCREEN
+# LOGIN / LANDING SCREEN (Redesigned)
 # =========================================================
 if not st.session_state.user:
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.title("🔐 Login")
-        auth_mode = st.radio("Mode", ["Login", "Register"], horizontal=True)
-        if auth_mode == "Login":
-            with st.form("login_form"):
-                username = st.text_input("Username")
-                password = st.text_input("Password", type="password")
-                if st.form_submit_button("Log In", type="primary"):
-                    if db.login_user(username, password):
-                        st.session_state.user = username
-                        st.rerun()
-                    else: st.error("Invalid credentials.")
-        else:
-            with st.form("register_form"):
-                st.subheader("Create Account")
-                new_user = st.text_input("Username"); new_email = st.text_input("Email")
-                p1 = st.text_input("Password", type="password"); p2 = st.text_input("Confirm", type="password")
-                if st.form_submit_button("Create", type="primary"):
-                    if p1 == p2 and new_user: 
-                        if db.create_user(new_user, new_email, p1): st.success("Created! Log in.")
-                        else: st.error("Exists.")
-                    else: st.error("Error.")
+    # Center alignment using columns
+    l_col, c_col, r_col = st.columns([1, 2, 1])
+    
+    with c_col:
+        # 1. LANDING HEADER
+        st.markdown("""
+            <div style='text-align: center; margin-top: 50px; margin-bottom: 30px;'>
+                <h1 style='font-size: 3rem; margin-bottom: 10px;'>🩺 Cochrane AI Auditor</h1>
+                <h3 style='font-weight: 300; color: #555;'>Explainable and Auditable AI-assisted Evidence Synthesis</h3>
+                <hr style='margin: 20px 0;'>
+                <p style='font-size: 1.1rem; color: #666;'>
+                    Accelerate your systematic reviews with intelligent screening, 
+                    meta-analysis mining, and fully auditable decision support.
+                </p>
+            </div>
+        """, unsafe_allow_html=True)
+
+        # 2. AUTHENTICATION BOX
+        with st.container(border=True):
+            auth_mode = st.radio("Access Mode", ["Login", "Register"], horizontal=True, label_visibility="collapsed")
+            
+            if auth_mode == "Login":
+                st.markdown("### 🔐 Sign In")
+                with st.form("login_form"):
+                    username = st.text_input("Username")
+                    password = st.text_input("Password", type="password")
+                    
+                    st.markdown("") # Spacer
+                    if st.form_submit_button("Log In to Dashboard", type="primary", use_container_width=True):
+                        if db.login_user(username, password):
+                            st.session_state.user = username
+                            st.rerun()
+                        else:
+                            st.error("Invalid username or password.")
+            else:
+                st.markdown("### 📝 Create Account")
+                with st.form("register_form"):
+                    c1, c2 = st.columns(2)
+                    new_user = c1.text_input("Username")
+                    new_email = c2.text_input("Email Address")
+                    p1 = st.text_input("Password", type="password")
+                    p2 = st.text_input("Confirm Password", type="password")
+                    
+                    st.markdown("") # Spacer
+                    if st.form_submit_button("Create Free Account", type="primary", use_container_width=True):
+                        if p1 != p2:
+                            st.error("Passwords do not match!")
+                        elif not new_user:
+                            st.error("Username required.")
+                        else:
+                            if db.create_user(new_user, new_email, p1):
+                                st.success("Account created! Please switch to 'Login' tab.")
+                            else:
+                                st.error("Username already exists.")
+
     st.stop()
 
 # =========================================================
@@ -208,14 +239,12 @@ elif st.session_state.step == 2:
     with c1:
         with st.container(border=True):
             st.markdown("### 📑 Level 1: Abstract Screening")
-            st.markdown("**Focus:** Sensitivity. High throughput.")
             st.metric("Studies Processed", l1_count)
             if st.button("Enter Level 1", type="primary", use_container_width=True):
                 st.session_state.workflow_mode = "level_1"; st.session_state.step = 3; st.rerun()
     with c2:
         with st.container(border=True):
             st.markdown("### 📖 Level 2: Full Text Review")
-            st.markdown("**Focus:** Specificity. Deep analysis & Meta-Mining.")
             st.metric("Studies Processed", l2_count)
             if st.button("Enter Level 2", type="primary", use_container_width=True):
                 st.session_state.workflow_mode = "level_2"; st.session_state.step = 3; st.rerun()
@@ -233,6 +262,11 @@ elif st.session_state.step == 3:
     with c_head_2: st.caption(f"Project: {st.session_state.project_name}")
     
     def add_result_to_db(title, text, audit, source):
+        # DUPLICATE CHECKER
+        existing = db.get_project_results(st.session_state.project_id, current_table)
+        if any(r['Title'] == title for r in existing):
+            return "DUPLICATE"
+
         data = {
             "Title": title, "Abstract": text, "Decision": audit.ScreeningDecision, 
             "Reason": audit.Reasoning_Summary, "Confidence": audit.Confidence_Score,
@@ -245,6 +279,16 @@ elif st.session_state.step == 3:
             "Source": source, "Override_History": ""
         }
         return db.save_result(st.session_state.project_id, data, current_table)
+
+    def process_one_batch_item(item, is_pdf, pico_data, stage_mode):
+        if is_pdf:
+            text = extract_text_from_pdf(item, strict_crop=True)
+            name = item.name
+        else:
+            text = f"{item['Title']}\n{item['Abstract']}"
+            name = item['Title']
+        res = analyze_study(text, pico_data, stage=stage_mode)
+        return name, text, res
 
     tabs_list = ["Screening", "Audit Records", "Dashboard"]
     if mode == "level_2": tabs_list.insert(1, "Meta-Miner")
@@ -280,15 +324,19 @@ elif st.session_state.step == 3:
                     with st.spinner("Analyzing..."):
                         res = analyze_study(txt, st.session_state.pico, stage=mode)
                         nid = add_result_to_db(ti if 'ti' in locals() and ti else file_name, txt, res, "Single")
-                        st.session_state.last_audit_id = nid
-                        st.session_state.last_single_result = res
+                        
+                        if nid == "DUPLICATE":
+                            st.warning("⚠️ Study with this title already exists in the database.")
+                        else:
+                            st.session_state.last_audit_id = nid
+                            st.session_state.last_single_result = res
                 
                 if 'last_single_result' in st.session_state:
                     res = st.session_state.last_single_result
                     st.divider()
                     render_full_result_view({
                         'Decision': res.ScreeningDecision,
-                        'Override_History': "", # New result, no override yet
+                        'Override_History': "",
                         'P': res.ReasoningLog.Population_Check, 'I': res.ReasoningLog.Intervention_Check,
                         'C': res.ReasoningLog.Comparator_Check, 'O': res.ReasoningLog.Outcome_Check,
                         'S': res.ReasoningLog.StudyDesign_Check, 'E': res.ReasoningLog.Exclusion_Check,
@@ -297,7 +345,6 @@ elif st.session_state.step == 3:
                     with st.expander("Reasoning Summary", expanded=True):
                         st.write(res.Reasoning_Summary)
                     
-                    # 1. OVERRIDE BUTTONS IN SINGLE VIEW
                     st.markdown("#### 🛠 Manual Override")
                     b1, b2 = st.columns(2)
                     if b1.button("Override -> INCLUDE", use_container_width=True, key="sing_ov_inc"):
@@ -310,30 +357,35 @@ elif st.session_state.step == 3:
                          st.rerun()
 
         with st2:
-            st.info("Batch Upload")
+            st.info("⚡ Parallel Batch Processing (5x Speed)")
             if mode == "level_1":
                 bf = st.file_uploader("Upload CSV", type=["csv"])
                 if bf and st.button("Run Batch"):
                     df = pd.read_csv(bf)
                     bar = st.progress(0)
-                    for i, r in df.iterrows():
-                        tx = f"{r.get('Title','')}\n{r.get('Abstract','')}"
-                        rs = analyze_study(tx, st.session_state.pico, stage="level_1")
-                        add_result_to_db(r.get('Title'), r.get('Abstract'), rs, "Batch CSV")
-                        bar.progress((i+1)/len(df))
+                    rows = [r for _, r in df.iterrows()]; total = len(rows)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                        pico = st.session_state.pico; stg = mode
+                        futures = [executor.submit(process_one_batch_item, r, False, pico, stg) for r in rows]
+                        for i, f in enumerate(concurrent.futures.as_completed(futures)):
+                            name, text, res = f.result()
+                            add_result_to_db(name, text, res, "Batch CSV")
+                            bar.progress((i + 1) / total)
                     st.success("Done!")
             else:
                 bfs = st.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
                 if bfs and st.button("Run Batch"):
-                    bar = st.progress(0)
-                    for i, f in enumerate(bfs):
-                        tx = extract_text_from_pdf(f, strict_crop=True)
-                        rs = analyze_study(tx, st.session_state.pico, stage="level_2")
-                        add_result_to_db(f.name, tx, rs, "Batch PDF")
-                        bar.progress((i+1)/len(bfs))
+                    bar = st.progress(0); total = len(bfs)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                        pico = st.session_state.pico; stg = mode
+                        futures = [executor.submit(process_one_batch_item, f, True, pico, stg) for f in bfs]
+                        for i, f in enumerate(concurrent.futures.as_completed(futures)):
+                            name, text, res = f.result()
+                            add_result_to_db(name, text, res, "Batch PDF")
+                            bar.progress((i + 1) / total)
                     st.success("Done!")
 
-    # --- TAB 2: META-MINER (Scrollable Card Layout) ---
+    # --- TAB 2: META-MINER ---
     if mode == "level_2":
         with tabs[1]:
             st.subheader("⛏️ Meta-Miner")
@@ -350,7 +402,6 @@ elif st.session_state.step == 3:
                         txt = extract_text_from_pdf(mf, strict_crop=False)
                         citations = mine_citations(txt, st.session_state.pico)
                         st.session_state.last_mining_result = citations
-                        # Reset selections
                         st.session_state.miner_selections = {i: c.IsRelevant for i, c in enumerate(citations.Citations)}
                 
                 if 'last_mining_result' in st.session_state:
@@ -359,46 +410,55 @@ elif st.session_state.step == 3:
                     st.markdown("#### Found Studies")
                     st.caption("Select studies to import. Scroll to see all candidates.")
                     
-                    # 2. SCROLLABLE CONTAINER FOR CARDS
                     with st.container(height=650):
-                        # Meta-Study Itself
                         with st.container(border=True):
                             meta_sel = st.checkbox(f"**SOURCE REVIEW:** {curr_name}", key="sel_meta")
                             st.caption("The Systematic Review file itself.")
 
-                        # Individual Citations
                         for i, c in enumerate(res.Citations):
-                            # Default value comes from AI
                             is_checked = st.session_state.miner_selections.get(i, False)
-                            
                             with st.container(border=True):
                                 col_chk, col_txt = st.columns([0.1, 0.9])
                                 with col_chk:
-                                    # Update session state on change
                                     new_val = st.checkbox("", value=is_checked, key=f"miner_chk_{i}")
                                     st.session_state.miner_selections[i] = new_val
                                 with col_txt:
                                     st.markdown(f"**{c.AuthorYear}** - {c.Title}")
                                     st.caption(f"Confidence: {c.Confidence}% | {c.Context}")
+                                    with st.expander("View Reason"):
+                                        st.write(c.Reason)
                     
                     st.divider()
                     if st.button("Add to Level 2 Screen Results", type="primary", use_container_width=True):
                         added_count = 0
-                        # Add Meta-Study if checked
+                        # Check dupes manually for this block
+                        existing = db.get_project_results(st.session_state.project_id, current_table)
+                        existing_titles = [r['Title'] for r in existing]
+
                         if st.session_state.get("sel_meta", False):
-                             data = {"Title": curr_name, "Abstract": "Systematic Review Source File", "Decision": "INCLUDE", "Reason": "Mined Source", "Confidence": 100, "P":True,"I":True,"C":True,"O":True,"S":True,"E":False,"P_Reas":"","I_Reas":"","C_Reas":"","O_Reas":"","S_Reas":"","E_Reas":"","Source": f"Mined Source", "Override_History": ""}
-                             db.save_result(st.session_state.project_id, data, current_table)
-                             added_count += 1
+                             if curr_name not in existing_titles:
+                                 data = {"Title": curr_name, "Abstract": "Systematic Review Source File", "Decision": "INCLUDE", "Reason": "Mined Source", "Confidence": 100, "P":True,"I":True,"C":True,"O":True,"S":True,"E":False,"P_Reas":"","I_Reas":"","C_Reas":"","O_Reas":"","S_Reas":"","E_Reas":"","Source": f"Mined Source", "Override_History": ""}
+                                 db.save_result(st.session_state.project_id, data, current_table)
+                                 added_count += 1
                         
-                        # Add Citations
                         for i, c in enumerate(res.Citations):
                             if st.session_state.miner_selections.get(i, False):
-                                data = {"Title": c.Title, "Abstract": f"AUTHOR: {c.AuthorYear}\nCONTEXT: {c.Context}", "Decision": "INCLUDE", "Reason": "Mined", "Confidence": c.Confidence, "P":True,"I":True,"C":True,"O":True,"S":True,"E":False,"P_Reas":"","I_Reas":"","C_Reas":"","O_Reas":"","S_Reas":"","E_Reas":"","Source": f"Mined: {curr_name}", "Override_History": ""}
-                                db.save_result(st.session_state.project_id, data, current_table)
-                                added_count += 1
+                                if c.Title not in existing_titles:
+                                    data = {
+                                        "Title": c.Title, 
+                                        "Abstract": f"AUTHOR: {c.AuthorYear}\nCONTEXT: {c.Context}\nREASON: {c.Reason}", 
+                                        "Decision": "INCLUDE", 
+                                        "Reason": c.Reason, 
+                                        "Confidence": c.Confidence, 
+                                        "P":True,"I":True,"C":True,"O":True,"S":True,"E":False,
+                                        "P_Reas":"","I_Reas":"","C_Reas":"","O_Reas":"","S_Reas":"","E_Reas":"",
+                                        "Source": f"Mined: {curr_name}", 
+                                        "Override_History": ""
+                                    }
+                                    db.save_result(st.session_state.project_id, data, current_table)
+                                    added_count += 1
                         
-                        if added_count > 0: st.success(f"Imported {added_count} studies!")
-                        else: st.warning("No studies selected.")
+                        st.success(f"Imported {added_count} studies! (Skipped duplicates)")
 
     # --- TAB 3: AUDIT RECORDS ---
     idx = 2 if mode == "level_2" else 1
@@ -407,6 +467,12 @@ elif st.session_state.step == 3:
         res = db.get_project_results(st.session_state.project_id, current_table)
         df = pd.DataFrame(res)
         if not df.empty:
+            
+            # --- FIX: VISUAL RE-INDEXING (1, 2, 3...) ---
+            # We create a new column 'Display_ID' numbered 1 to N
+            df = df.sort_values(by='ID') # Ensure consistent order
+            df['Display_ID'] = range(1, len(df) + 1)
+            
             c_fil, c_view = st.columns([1, 2])
             with c_fil:
                 dec = st.selectbox("Decision", ["All", "INCLUDE", "EXCLUDE", "UNCLEAR"])
@@ -418,12 +484,14 @@ elif st.session_state.step == 3:
                 if dec != "All": vdf = vdf[vdf['Decision'] == dec]
                 if src != "All": vdf = vdf[vdf['Source'] == src]
                 
-                sel = st.radio("Select:", vdf['ID'], format_func=lambda x: f"#{x} {vdf[vdf.ID==x]['Title'].iloc[0][:30]}...")
+                # Use Display_ID for the radio button label, but keep ID for logic
+                sel = st.radio("Select:", vdf['ID'], format_func=lambda x: f"#{vdf[vdf.ID==x]['Display_ID'].iloc[0]} {vdf[vdf.ID==x]['Title'].iloc[0][:30]}...")
             
             with c_view:
                 if sel and not vdf.empty:
                     row = df[df.ID == sel].iloc[0]
-                    st.markdown(f"### {row['Title']}")
+                    # Show Display ID in Title
+                    st.markdown(f"### #{row['Display_ID']}: {row['Title']}")
                     render_full_result_view(row)
                     st.info(f"**AI Reason:** {row['Reason']}")
                     with st.expander("Full Text / Abstract", expanded=False): st.write(row['Abstract'])
@@ -432,59 +500,43 @@ elif st.session_state.step == 3:
                     if c_b1.button("Override: INCLUDE", use_container_width=True): db.update_result_decision(int(row['ID']), "INCLUDE", "Manual Override", current_table); st.rerun()
                     if c_b2.button("Override: EXCLUDE", use_container_width=True): db.update_result_decision(int(row['ID']), "EXCLUDE", "Manual Override", current_table); st.rerun()
 
-# --- TAB 4: DASHBOARD (Updated) ---
+    # --- TAB 4: DASHBOARD ---
     idx = 3 if mode == "level_2" else 2
     with tabs[idx]:
         st.subheader("📊 Analytics")
         if not df.empty:
-            # 1. TOP LEVEL METRICS
             total_studies = len(df)
-            num_inc = len(df[df['Decision']=='INCLUDE'])
-            num_exc = len(df[df['Decision']=='EXCLUDE'])
-            num_unc = len(df[df['Decision']=='UNCLEAR'])
-
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Total Studies", total_studies)
-            m2.metric("Included", num_inc)
-            m3.metric("Excluded", num_exc)
-            m4.metric("Unclear", num_unc)
+            m2.metric("Included", len(df[df['Decision']=='INCLUDE']))
+            m3.metric("Excluded", len(df[df['Decision']=='EXCLUDE']))
+            m4.metric("Unclear", len(df[df['Decision']=='UNCLEAR']))
             st.divider()
             
-            # 2. OVERRIDE ANALYSIS (Detailed)
-            overridden_df = df[df['Override_History'] != ""]
-            num_overridden = len(overridden_df)
-            pct_overridden = round((num_overridden / total_studies) * 100, 1) if total_studies > 0 else 0
+            ov_df = df[df['Override_History'] != ""]
+            ov_num = len(ov_df)
+            ov_pct = round((ov_num / total_studies) * 100, 1) if total_studies > 0 else 0
             
-            # Calculate direction (Proxied by final state)
-            # If it's overridden AND currently "INCLUDE", it implies it came from Exclude/Unclear.
-            ov_to_inc = len(overridden_df[overridden_df['Decision'] == 'INCLUDE'])
-            ov_to_exc = len(overridden_df[overridden_df['Decision'] == 'EXCLUDE'])
+            ov_to_inc = len(ov_df[ov_df['Decision'] == 'INCLUDE'])
+            ov_to_exc = len(ov_df[ov_df['Decision'] == 'EXCLUDE'])
             
             st.markdown("#### ⚠️ Override Analysis")
             o1, o2, o3, o4 = st.columns(4)
-            o1.metric("Total Overrides", f"{num_overridden}")
-            o2.metric("Override Rate", f"{pct_overridden}%")
-            o3.metric("Overridden → INCLUDE", f"{ov_to_inc}", help="Originally Exclude or Unclear, changed to Include")
-            o4.metric("Overridden → EXCLUDE", f"{ov_to_exc}", help="Originally Include or Unclear, changed to Exclude")
+            o1.metric("Total Overrides", f"{ov_num}")
+            o2.metric("Override Rate", f"{ov_pct}%")
+            o3.metric("Overridden → INCLUDE", f"{ov_to_inc}")
+            o4.metric("Overridden → EXCLUDE", f"{ov_to_exc}")
             
             st.divider()
-            
-            # 3. CHARTS
             c1, c2 = st.columns(2)
-            
             with c1:
                 st.markdown("#### Decisions by Source")
                 if 'Source' in df.columns:
-                    # Clean source to generic types for chart
                     df['SourceType'] = df['Source'].apply(lambda x: "Mined" if "Mined" in str(x) else "Direct Upload")
-                    # Group and plot
-                    source_counts = df.groupby("SourceType")['Decision'].value_counts().unstack()
-                    st.bar_chart(source_counts)
-            
+                    st.bar_chart(df.groupby("SourceType")['Decision'].value_counts().unstack())
             with c2:
                 st.markdown("#### Confidence Distribution")
                 import altair as alt
-                # Create a Histogram using Altair for clean tooltips and removing "Index"
                 chart = alt.Chart(df).mark_bar().encode(
                     alt.X("Confidence:Q", bin=True, title="Confidence Score"),
                     alt.Y("count()", title="Number of Studies"),

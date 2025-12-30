@@ -280,26 +280,15 @@ elif st.session_state.step == 3:
         }
         return db.save_result(st.session_state.project_id, data, current_table)
 
-def process_one_batch_item(item, pico_criteria):
-    try:
-        # --- SAFE COLUMN MAPPING ---
-        # Look for the best match for 'Title'
-        title_key = next((k for k in item.index if k.lower() in ['title', 'study title', 'name']), None)
-        # Look for the best match for 'Abstract'
-        abstract_key = next((k for k in item.index if k.lower() in ['abstract', 'summary', 'text', 'description']), None)
-        
-        if not title_key or not abstract_key:
-            return "Unknown", "Missing Columns", None
-
-        study_title = item[title_key]
-        study_text = f"{study_title}\n{item[abstract_key]}"
-        
-        # Call the existing analysis function from audit_engine.py
-        result = analyze_study(study_text, pico_criteria, stage="level_1")
-        return study_title, study_text, result
-        
-    except Exception as e:
-        return "Error", str(e), None
+    def process_one_batch_item(item, is_pdf, pico_data, stage_mode):
+        if is_pdf:
+            text = extract_text_from_pdf(item, strict_crop=True)
+            name = item.name
+        else:
+            text = f"{item['Title']}\n{item['Abstract']}"
+            name = item['Title']
+        res = analyze_study(text, pico_data, stage=stage_mode)
+        return name, text, res
 
     tabs_list = ["Screening", "Audit Records", "Dashboard"]
     if mode == "level_2": tabs_list.insert(1, "Meta-Miner")

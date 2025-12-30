@@ -3,3 +3,4 @@ openai
 pandas
 pdfplumber
 pydantic
+streamlit-pdf-viewer

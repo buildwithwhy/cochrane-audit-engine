@@ -94,7 +94,7 @@ if not st.session_state.user:
     with c_col:
         st.markdown("""
             <div style='text-align: center; margin-top: 50px; margin-bottom: 30px;'>
-                <h1 style='font-size: 3rem; margin-bottom: 10px;'>🩺 Cochrane AI Auditor</h1>
+                <h1 style='font-size: 3rem; margin-bottom: 10px;'>🩺 AI Evidence Synthesis</h1>
                 <h3 style='font-weight: 300; color: #555;'>Explainable and Auditable AI-assisted Evidence Synthesis</h3>
                 <hr style='margin: 20px 0;'>
                 <p style='font-size: 1.1rem; color: #666;'>

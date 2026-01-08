@@ -1,4 +1,5 @@
 import streamlit as st
+import time 
 import fitz  # PyMuPDF
 from openai import OpenAI
 from pydantic import BaseModel, Field
@@ -92,27 +93,64 @@ def extract_pico_criteria(protocol_text):
 # --- 5. ANALYZE STUDY ---
 def analyze_study(text_content, pico_criteria, stage="level_1"):
     model_choice = "gpt-4o-mini" if stage == "level_1" else "gpt-4o-2024-08-06"
-    max_chars = 15000 if stage == "level_1" else 60000
+    # Level 2 uses more context, Level 1 is tighter
+    max_chars = 15000 if stage == "level_1" else 100000 
 
     system_prompt = f"""
-    You are a Cochrane systematic review Screener.
+    You are a Cochrane Screener.
     CRITERIA: P: {pico_criteria['P']}, I: {pico_criteria['I']}, C: {pico_criteria['C']}, O: {pico_criteria['O']}, S: {pico_criteria['S']}, E: {pico_criteria['E']}
     Allow Meta-Analysis? {pico_criteria.get('IncludeMetaAnalysis', False)}
     """
 
-    completion = client.beta.chat.completions.parse(
-        model=model_choice,
-        messages=[{"role": "system", "content": system_prompt}, {"role": "user", "content": f"STUDY:\n{text_content[:max_chars]}"}],
-        response_format=ScreeningDecision,
-        temperature=0.0,
-    )
-    
-    result = completion.choices[0].message.parsed
-    if result.Confidence_Score < 85:
-        result.ScreeningDecision = "UNCLEAR"
-        result.Reasoning_Summary = f"⚠️ [AUTO-FLAGGED] AI Confidence ({result.Confidence_Score}%) is below 85% threshold. Human review required. AI thought: {result.Reasoning_Summary}"
-    
-    return result
+    # RETRY LOGIC (Max 3 attempts)
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            completion = client.beta.chat.completions.parse(
+                model=model_choice,
+                messages=[
+                    {"role": "system", "content": system_prompt}, 
+                    {"role": "user", "content": f"STUDY:\n{text_content[:max_chars]}"}
+                ],
+                response_format=ScreeningDecision,
+                temperature=0.0,
+            )
+            
+            result = completion.choices[0].message.parsed
+            
+            # Confidence Check
+            if result.Confidence_Score < 85:
+                result.ScreeningDecision = "UNCLEAR"
+                result.Reasoning_Summary = f"⚠️ [AUTO-FLAGGED] Confidence {result.Confidence_Score}% < 85%. AI Reasoning: {result.Reasoning_Summary}"
+            
+            return result
+
+        except Exception as e:
+            error_str = str(e)
+            # Check if it's a Rate Limit error (429)
+            if "429" in error_str or "rate limit" in error_str.lower():
+                if attempt < max_retries - 1:
+                    wait_time = 35 # Wait 35 seconds (slightly more than the 30.36s requested)
+                    time.sleep(wait_time)
+                    continue # Try again
+                else:
+                    # If we fail 3 times, return a dummy Fail object
+                    return ScreeningDecision(
+                        ScreeningDecision="UNCLEAR",
+                        Confidence_Score=0,
+                        Reasoning_Summary=f"API RATE LIMIT EXCEEDED. Please try again later. Error: {error_str}",
+                        ReasoningLog=ReasoningLog(
+                            Population_Check=False, Population_Reason="Error",
+                            Intervention_Check=False, Intervention_Reason="Error",
+                            Comparator_Check=False, Comparator_Reason="Error",
+                            Outcome_Check=False, Outcome_Reason="Error",
+                            StudyDesign_Check=False, StudyDesign_Reason="Error",
+                            Exclusion_Check=False, Exclusion_Reason="Error"
+                        )
+                    )
+            else:
+                # If it's not a rate limit (e.g. invalid key), fail immediately
+                raise e
 
 # --- 6. META-MINER (Brain Split Strategy) ---
 def mine_citations(text_content, pico_criteria):

@@ -8,9 +8,9 @@ import concurrent.futures
 # Initialize Database
 db.init_db()
 
-st.set_page_config(page_title="Cochrane AI Auditor", layout="wide", page_icon="🩺")
+st.set_page_config(page_title="AI Evidence Synthesis", layout="wide", page_icon="🩺")
 
-# --- CUSTOM CSS ---
+# --- CUSTOM CSS (PRESERVED) ---
 st.markdown("""
 <style>
     .decision-box { padding: 15px; border-radius: 8px; text-align: center; font-size: 1.5em; font-weight: 800; margin-bottom: 10px; color: white; }
@@ -48,11 +48,11 @@ def display_pdf(uploaded_file, height=900):
         st.error(f"Error displaying PDF: {e}")
 
 # =========================================================
-# HELPER: SCORECARD
+# HELPER: SCORECARD (PRESERVED)
 # =========================================================
 def render_full_result_view(row):
-    decision = row['Decision']
-    override = row['Override_History']
+    decision = row.get('Decision', 'UNCLEAR')
+    override = row.get('Override_History', None)
     
     css_class = "dec-include" if decision == "INCLUDE" else "dec-exclude" if decision == "EXCLUDE" else "dec-unclear"
     icon = "✅" if decision == "INCLUDE" else "⛔" if decision == "EXCLUDE" else "🤔"
@@ -63,35 +63,35 @@ def render_full_result_view(row):
         st.markdown(f'<div class="override-box">⚠️ Manually Overridden to {decision}</div>', unsafe_allow_html=True)
 
     def badge(label, is_pass):
+        # Handle cases where data might be missing/None
+        is_pass = bool(is_pass) 
         color = "badge-success" if is_pass else "badge-danger"
         icon = "✔" if is_pass else "✖"
         return f'<span class="metric-badge {color}">{icon} {label}</span>'
     
     html = f"""
     <div style="margin-bottom: 10px;">
-        {badge("Population", row['P'])}
-        {badge("Intervention", row['I'])}
-        {badge("Comparator", row['C'])}
-        {badge("Outcome", row['O'])}
-        {badge("Study Design", row['S'])}
-        {badge("Excl. Criteria", not row['E'])}
+        {badge("Population", row.get('P'))}
+        {badge("Intervention", row.get('I'))}
+        {badge("Comparator", row.get('C'))}
+        {badge("Outcome", row.get('O'))}
+        {badge("Study Design", row.get('S'))}
+        {badge("Excl. Criteria", not row.get('E'))}
     </div>
     """
     st.markdown(html, unsafe_allow_html=True)
     
-    conf = row['Confidence']
+    conf = row.get('Confidence', 0)
     st.caption(f"**AI Confidence:** {conf}%")
     st.progress(conf / 100)
 
 # =========================================================
-# LOGIN / LANDING SCREEN (Redesigned)
+# LOGIN / LANDING SCREEN (PRESERVED)
 # =========================================================
 if not st.session_state.user:
-    # Center alignment using columns
     l_col, c_col, r_col = st.columns([1, 2, 1])
     
     with c_col:
-        # 1. LANDING HEADER
         st.markdown("""
             <div style='text-align: center; margin-top: 50px; margin-bottom: 30px;'>
                 <h1 style='font-size: 3rem; margin-bottom: 10px;'>🩺 Cochrane AI Auditor</h1>
@@ -104,7 +104,6 @@ if not st.session_state.user:
             </div>
         """, unsafe_allow_html=True)
 
-        # 2. AUTHENTICATION BOX
         with st.container(border=True):
             auth_mode = st.radio("Access Mode", ["Login", "Register"], horizontal=True, label_visibility="collapsed")
             
@@ -114,7 +113,7 @@ if not st.session_state.user:
                     username = st.text_input("Username")
                     password = st.text_input("Password", type="password")
                     
-                    st.markdown("") # Spacer
+                    st.markdown("") 
                     if st.form_submit_button("Log In to Dashboard", type="primary", use_container_width=True):
                         if db.login_user(username, password):
                             st.session_state.user = username
@@ -130,7 +129,7 @@ if not st.session_state.user:
                     p1 = st.text_input("Password", type="password")
                     p2 = st.text_input("Confirm Password", type="password")
                     
-                    st.markdown("") # Spacer
+                    st.markdown("") 
                     if st.form_submit_button("Create Free Account", type="primary", use_container_width=True):
                         if p1 != p2:
                             st.error("Passwords do not match!")
@@ -280,15 +279,33 @@ elif st.session_state.step == 3:
         }
         return db.save_result(st.session_state.project_id, data, current_table)
 
+# --- FIX: ROBUST BATCH PROCESSOR ---
     def process_one_batch_item(item, is_pdf, pico_data, stage_mode):
-        if is_pdf:
-            text = extract_text_from_pdf(item, strict_crop=True)
-            name = item.name
-        else:
-            text = f"{item['Title']}\n{item['Abstract']}"
-            name = item['Title']
-        res = analyze_study(text, pico_data, stage=stage_mode)
-        return name, text, res
+        import io 
+        try:
+            if is_pdf:
+                # Unpack the tuple (filename, bytes) we send from the main loop
+                fname, fbytes = item
+                # Create a fake file object for PyMuPDF
+                fake_file = io.BytesIO(fbytes)
+                text = extract_text_from_pdf(fake_file, strict_crop=True)
+                name = fname
+            else:
+                # SAFE COLUMN MAPPING for CSV
+                title_key = next((k for k in item.index if k.lower() in ['title', 'study title', 'name']), None)
+                abstract_key = next((k for k in item.index if k.lower() in ['abstract', 'summary', 'text', 'description']), None)
+                
+                if not title_key: title_key = item.index[0] 
+                if not abstract_key: abstract_key = item.index[1] if len(item.index) > 1 else title_key
+                
+                name = str(item[title_key])
+                text = f"{name}\n{str(item[abstract_key])}"
+                
+            res = analyze_study(text, pico_data, stage=stage_mode)
+            return name, text, res
+        except Exception as e:
+            # Return the error so we can see it in the UI
+            return "Error", f"Failed: {str(e)}", None
 
     tabs_list = ["Screening", "Audit Records", "Dashboard"]
     if mode == "level_2": tabs_list.insert(1, "Meta-Miner")
@@ -361,29 +378,49 @@ elif st.session_state.step == 3:
             if mode == "level_1":
                 bf = st.file_uploader("Upload CSV", type=["csv"])
                 if bf and st.button("Run Batch"):
-                    df = pd.read_csv(bf)
+                    df_upload = pd.read_csv(bf)
                     bar = st.progress(0)
-                    rows = [r for _, r in df.iterrows()]; total = len(rows)
+                    rows = [r for _, r in df_upload.iterrows()]; total = len(rows)
+                    
                     with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
                         pico = st.session_state.pico; stg = mode
                         futures = [executor.submit(process_one_batch_item, r, False, pico, stg) for r in rows]
                         for i, f in enumerate(concurrent.futures.as_completed(futures)):
                             name, text, res = f.result()
-                            add_result_to_db(name, text, res, "Batch CSV")
+                            if res: # Only add if valid result
+                                add_result_to_db(name, text, res, "Batch CSV")
                             bar.progress((i + 1) / total)
                     st.success("Done!")
             else:
                 bfs = st.file_uploader("Upload PDFs", type=["pdf"], accept_multiple_files=True)
                 if bfs and st.button("Run Batch"):
-                    bar = st.progress(0); total = len(bfs)
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+                    # 1. PRE-READ FILES
+                    pdf_data = [(f.name, f.read()) for f in bfs]
+                    
+                    bar = st.progress(0)
+                    total = len(pdf_data)
+                    success_count = 0
+                    
+                    # 2. SMART WORKER ALLOCATION
+                    # If Level 2 (Full Text), use 1 worker to save tokens. 
+                    # If Level 1 (Abstracts), use 4 workers for speed.
+                    workers = 1 if mode == "level_2" else 4
+                    st.toast(f"Processing with {workers} concurrent worker(s)...")
+
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
                         pico = st.session_state.pico; stg = mode
-                        futures = [executor.submit(process_one_batch_item, f, True, pico, stg) for f in bfs]
+                        futures = [executor.submit(process_one_batch_item, p_data, True, pico, stg) for p_data in pdf_data]
+                        
                         for i, f in enumerate(concurrent.futures.as_completed(futures)):
                             name, text, res = f.result()
-                            add_result_to_db(name, text, res, "Batch PDF")
+                            if res:
+                                add_result_to_db(name, text, res, "Batch PDF")
+                                success_count += 1
+                            else:
+                                st.error(f"⚠️ Failed: {name}")
                             bar.progress((i + 1) / total)
-                    st.success("Done!")
+                            
+                    st.success(f"Batch Complete! Processed {success_count}/{total}.")
 
     # --- TAB 2: META-MINER ---
     if mode == "level_2":
@@ -469,7 +506,6 @@ elif st.session_state.step == 3:
         if not df.empty:
             
             # --- FIX: VISUAL RE-INDEXING (1, 2, 3...) ---
-            # We create a new column 'Display_ID' numbered 1 to N
             df = df.sort_values(by='ID') # Ensure consistent order
             df['Display_ID'] = range(1, len(df) + 1)
             
